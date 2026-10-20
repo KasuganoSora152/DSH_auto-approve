@@ -1,0 +1,147 @@
+# dsh-auto-approve 组合包贡献的插件层。
+#
+# 这个文件干两件事：
+#   1. 【覆盖】内置的 permission 行，往预设表里加第四项「自动审批」，并把它设为新会话默认；
+#   2. 【插入】本插件自己的行，负责每次工具调用前的风险审查。
+#
+# ⚠️ patch 是「整块替换 config」，不是深合并。所以下面 presets 必须把**三种内置预设也重述一遍**，
+# 少写任何一个都会从选择器里消失。
+#
+# ⚠️ 为什么要重述而不是只加一项：`@deepseek-ai/dsh-permission-presets` 的 config 里
+# `presets` 是一张整体替换的表。只写 auto-approve 会把「仅可查看」「工作区内修改」「完全权限」
+# 全删掉 —— 那样用户就没法切回去了。
+#
+# ── 旋钮组合的唯一性（这是本设计的关键约束）──────────────────────────────
+# 一个权限预设 = 沙箱模式 + 审批策略。六种组合里现有三种占了：
+#     read-only          + ask      → 仅可查看
+#     workspace-write    + ask      → 工作区内修改
+#     danger-full-access + never    → 完全权限
+# 「自动审批」用剩下的 danger-full-access + ask：
+#   · 对用户：看起来就是"完全权限 + AI 把关"，与需求一致；
+#   · 对系统：**与其它三种互不重叠**，所以 current() 不可能把自动审批误判成别的模式，
+#     也就不会出现"界面显示自动审批、实际按完全权限裸跑"这种最危险的歧义。
+# 用 `never` 会与「完全权限」撞车，用 `ask` 才是对的。
+#
+# ── 为什么三种内置预设不写 name ─────────────────────────────────────────
+# 客户端自带这几个 preset 的多语言标签（仅可查看 / 工作区内修改 / 完全权限），
+# 只有**没写 name** 时才会走 locale 字典。写了 name 就会变成写死的字符串，
+# 英文界面也显示中文。所以只有我们自己新增的 auto-approve 带 name/description。
+
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      auto-approve:
+        sandbox: danger-full-access
+        approval: ask
+        # 名字前面的 `※` 就是「图标」。
+        #
+        # 为什么图标必须写在名字里：客户端把权限图标的映射**按预设 value 写死**成一张四人表
+        # （read-only / workspace-write / danger-full-access / auto），配置式预设查不到，
+        # 选项行上也没有 data-* 属性可供 CSS 补。而"替换官方控件"也不可行 ——
+        # 客户端没有权限相关的 Service，官方控件的 select 和 catalog 是它私有的。
+        #
+        # 名字是控件唯一允许我们提供的内容，而它会同时出现在**触发器**和**下拉列表**里，
+        # 且永远在文字**左边** —— 正好是官方格式。所以把符号塞进名字是唯一能做到的位置。
+        #
+        # 用 U+203B（REFERENCE MARK）：单色、跟随文字颜色，
+        # 由 Segoe UI Symbol 提供，Windows 字体回退能找到。不用 emoji（会变成彩色且风格跳出）。
+        name: '※  自动审批'
+        description: '不弹人工确认：每次工具调用前由 DeepSeek 模型判定风险，低风险直接执行，危险操作被拒绝并让模型改走更安全的方式。'
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    # 新会话默认用第四种模式。改回 workspace-write 即可恢复系统默认行为。
+    # 注意：这里只能配置**已配置的**预设名，`auto` 那个保留名不在此列。
+    defaultPreset: auto-approve
+
+- insert:
+    - id: auto-approve
+      name: dsh-auto-approve
+      config:
+        # 总开关。关掉等于这个插件不存在（预设还在选择器里，但不再审查 ——
+        # ⚠️ 那就等于一个不带把关的完全权限，所以关之前先想清楚）。
+        enabled: true
+
+        # 本插件只在这个预设下工作。改预设表里的名字时要同步改这里。
+        preset: 'auto-approve'
+
+        # ── 审查模型 ────────────────────────────────────────────────────
+        # 用哪个 provider。DeepSeek 官方是 `deepseek-official`。
+        provider: 'deepseek-official'
+
+        # 模型 id。留空 = **自动**：去模型目录里挑 id 或显示名带 `flash` 的那个
+        # （当前是 deepseek-flash / DeepSeek-V4.1-Flash）。
+        # 这样官方发布新的 flash 时不用改配置就会自动跟过去。
+        # 写死一个 id 就只在目录取不到时才会用到它。
+        model: ''
+        # 目录取不到时的兜底 id。
+        fallbackModel: 'deepseek-flash'
+        # 审查是低难度分类任务，low 足够；调高只增加延迟和费用。
+        reasoningEffort: 'low'
+
+        # ── 审查范围 ────────────────────────────────────────────────────
+        # 不审查的工具名。默认这三个**完全不碰文件系统**，审它们纯属浪费。
+        # ⚠️ 不要加 read / grep —— 它们虽然"只读"，但能读 ~/.ssh/id_rsa 和 .env，
+        # 那正是本插件最该拦的凭据泄露第一步。省那点 token 不值得开这个洞。
+        # （只读操作交给下面的第 1 层：它会检查 A/B 保护区，比 skip 安全得多。）
+        skipTools: [todo_write, job_list, list_agents]
+
+        # ── 第 1 层：确定性判定（不调模型）──────────────────────────────────
+        # 保护区（隐私/凭据、操作系统）直接拒绝；只读、新建、改本会话自己的文件直接放行。
+        # 判不准（纯 shell 命令、覆盖既有文件）才交给模型审查。
+        # 设 false 只关闭**确定性放行**（放行改走模型），保护区与破坏性硬拒绝照常生效。
+        fastPath: true
+
+        # ── 判定缓存（跨会话、落盘）──────────────────────────────────────
+        # 同一个调用（工具 + 工作目录 + **完整参数**）重复出现时复用上次结论。
+        # 模型被拒后原样重试是最常见的模式，命中后省一次请求、且让"重试被拒"近乎零成本。
+        # 键里带工作目录，所以同一相对路径在不同项目里不会被混为一谈。
+        cacheEnabled: true
+        # allow 结论的有效期。放行要信任"当时的事实"。
+        cacheAllowTtlMs: 3600000
+        # deny 结论的有效期。拒绝的陈旧风险几乎为零，而"被拒过"是最值钱的记忆。
+        cacheDenyTtlMs: 1209600000
+        # 两类各自的上限，互不挤占。
+        cacheAllowMax: 5000
+        cacheDenyMax: 5000
+        # 不参与缓存键的参数名。**这一项决定了缓存有没有用**：
+        # 实测两次 `node --version` 的 command / workdir 完全一样，
+        # 只有 description 换了说法（"first time" / "second time"），
+        # 哈希完整参数时它们就成了两个不同的键 —— 缓存一次都没命中。
+        # description 是纯展示字段，工具不读它，剔除它不会让行为不同的调用撞键。
+        cacheIgnoreArgs: [description]
+        # 缓存目录。留空 = <DSH_HOME>/auto-approve（不存在会自动创建）。
+        cacheDir: ''
+
+        # 单次审查里，发给模型的历史工具调用条数。用来判断"这个文件是不是本会话自己建的"
+        # （删除自己刚建的东西是低风险，删用户原有的是中风险）。
+        historyCalls: 3
+        # 历史里每条调用参数截断到多少字符。
+        historyArgChars: 400
+        # 待审调用本身的参数截断上限。超长参数（比如整份文件写入）不会被完整送审，
+        # 截断处会带一个 `…(已截断 N 字符)` 标记，让模型知道信息不全。
+        pendingArgChars: 1500
+        # shell 命令的每个字符都可能是判据，所以单独给一个更宽的截断。
+        shellArgChars: 4000
+
+        # ── 失败与超时 ──────────────────────────────────────────────────
+        # 审查请求的超时（毫秒）。超时按**拒绝**处理（fail-closed）。
+        maxTokens: 0
+        # 审查输出的封顶（token）。0 = 不限制。
+        # 推理 token 是延迟的主要来源，封顶能压住长尾（实测最长一次 5.6 秒）。
+        timeoutMs: 20000
+        # 审查本身失败了怎么办：
+        #   'deny'  —— 拒绝该调用（默认，fail-closed）
+        #   'allow' —— 放行（⚠️ 等于审查失守就裸跑，只在调试时用）
+        onReviewFailure: 'deny'
+
+        # ── 诊断 ────────────────────────────────────────────────────────
+        # true = 把每次判定打印到宿主日志（含风险等级与理由）。
+        debug: false

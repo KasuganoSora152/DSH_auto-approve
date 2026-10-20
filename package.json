@@ -1,0 +1,35 @@
+{
+  "name": "dsh-auto-approve",
+  "version": "0.5.9",
+  "description": "给 DeepSeek Harness 增加第四种权限模式「自动审批」：不再弹人工确认，由 DeepSeek 模型在每次工具调用前判定风险，低风险放行、危险操作拒绝并让模型换一条更安全的路。",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "cache.js",
+    "policy.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "icon.svg",
+    "test"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KasuganoSora152/DSH_auto-approve.git"
+  },
+  "homepage": "https://github.com/KasuganoSora152/DSH_auto-approve",
+  "bugs": {
+    "url": "https://github.com/KasuganoSora152/DSH_auto-approve/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+.status.json
+*.log
+.DS_Store
+Thumbs.db
